@@ -62,23 +62,44 @@ sudo iptables -L DOCKER-USER -n -v
 ### Apply Rules (if needed after reboot)
 
 ```bash
-# Allow established connections (for OpenAI outbound)
+# 1. Allow established connections (responses to our outbound)
 sudo iptables -I DOCKER-USER -m state --state ESTABLISHED,RELATED -j RETURN
 
-# Allow Telefacil on SIP ports
-sudo iptables -I DOCKER-USER -p udp --dport 5060 -s 130.117.91.38 -j ACCEPT
-sudo iptables -I DOCKER-USER -p tcp --dport 5060 -s 130.117.91.38 -j ACCEPT
-sudo iptables -I DOCKER-USER -p tcp --dport 5061 -s 130.117.91.38 -j ACCEPT
+# 2. Telefacil SIP signaling (inbound)
+sudo iptables -A DOCKER-USER -p udp --dport 5060 -s 130.117.91.38 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --dport 5060 -s 130.117.91.38 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --dport 5061 -s 130.117.91.38 -j ACCEPT
 
-# Drop all other SIP traffic
+# 3. Telefacil SIP signaling (outbound for registration)
+sudo iptables -A DOCKER-USER -p udp --dport 5060 -d 130.117.91.38 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --dport 5060 -d 130.117.91.38 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --dport 5061 -d 130.117.91.38 -j ACCEPT
+
+# 4. Telefacil RTP media (bidirectional)
+sudo iptables -A DOCKER-USER -p udp --dport 10000:10100 -s 130.117.91.38 -j ACCEPT
+sudo iptables -A DOCKER-USER -p udp --dport 10000:10100 -d 130.117.91.38 -j ACCEPT
+
+# 5. OpenAI SIP (TLS on 5061, Cloudflare 172.65.182.0/24)
+sudo iptables -A DOCKER-USER -p tcp --dport 5061 -d 172.65.182.0/24 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --sport 5061 -s 172.65.182.0/24 -j ACCEPT
+sudo iptables -A DOCKER-USER -p udp --dport 10000:65535 -d 172.65.182.0/24 -j ACCEPT
+sudo iptables -A DOCKER-USER -p udp --sport 10000:65535 -s 172.65.182.0/24 -j ACCEPT
+
+# 6. Drop all other SIP traffic (scanner protection)
 sudo iptables -A DOCKER-USER -p udp --dport 5060 -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 5060 -j DROP
 sudo iptables -A DOCKER-USER -p tcp --dport 5061 -j DROP
+
+# 7. Allow other traffic
 sudo iptables -A DOCKER-USER -j RETURN
 
 # Persist rules
 sudo netfilter-persistent save
 ```
+
+**Key IPs:**
+- Telefacil: `130.117.91.38` (msip.duocom.es)
+- OpenAI SIP: `172.65.182.0/24` (sip.api.openai.com via Cloudflare)
 
 Rules are stored in `/etc/iptables/rules.v4`.
 
