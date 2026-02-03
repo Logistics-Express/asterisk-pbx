@@ -1,0 +1,283 @@
+; Jarvis Asterisk Dialplan
+; Routes incoming calls from Telefacil to OpenAI Realtime SIP
+
+[general]
+static=yes
+writeprotect=yes
+
+[globals]
+; OpenAI Project ID for SIP URI construction
+OPENAI_PROJECT_ID=${OPENAI_PROJECT_ID}
+; Jarvis API webhook URL
+JARVIS_API_URL=${JARVIS_API_URL}
+; Maximum call duration in seconds (10 minutes)
+MAX_CALL_DURATION=600
+
+;======================================
+; INCOMING CALLS FROM TELEFACIL
+;======================================
+[from-telefacil]
+; Extension s - default for incoming calls (no specific DID)
+exten => s,1,NoOp(=== JARVIS INCOMING CALL ===)
+    same => n,NoOp(Caller: ${CALLERID(num)})
+    same => n,NoOp(Called DID: ${EXTEN})
+    same => n,Set(CALL_START=${EPOCH})
+    same => n,Answer()
+    same => n,Wait(0.5)
+    ; Set absolute timeout for call duration
+    same => n,Set(TIMEOUT(absolute)=${MAX_CALL_DURATION})
+    ; Route to OpenAI Realtime SIP
+    same => n,NoOp(Routing to OpenAI Realtime SIP)
+    ; Dial the openai_realtime endpoint - contact URI is in the AOR
+    same => n,Dial(PJSIP/openai_realtime,${MAX_CALL_DURATION},tTgG)
+    same => n,NoOp(Call ended: ${DIALSTATUS})
+    same => n,Hangup()
+
+; Catch any numbered extension (specific DID)
+exten => _X.,1,NoOp(=== JARVIS INCOMING CALL ===)
+    same => n,NoOp(Caller: ${CALLERID(num)})
+    same => n,NoOp(Called DID: ${EXTEN})
+    same => n,Set(CALL_START=${EPOCH})
+    same => n,Set(CALLED_DID=${EXTEN})
+    same => n,Answer()
+    same => n,Wait(0.5)
+    ; Set absolute timeout for call duration
+    same => n,Set(TIMEOUT(absolute)=${MAX_CALL_DURATION})
+    ; Route to OpenAI Realtime SIP
+    same => n,NoOp(Routing to OpenAI Realtime SIP)
+    same => n,Dial(PJSIP/openai_realtime,${MAX_CALL_DURATION},tTgG)
+    same => n,NoOp(Call ended: ${DIALSTATUS})
+    same => n,Hangup()
+
+; Handle failed calls
+exten => h,1,NoOp(=== JARVIS CALL HANGUP ===)
+    same => n,Set(CALL_DURATION=$[${EPOCH}-${CALL_START}])
+    same => n,NoOp(Duration: ${CALL_DURATION}s, Status: ${DIALSTATUS})
+
+;======================================
+; CONTEXT FOR OPENAI CALLS
+;======================================
+[to-openai]
+; This context handles the OpenAI side of the call
+; Audio flows directly between caller and OpenAI
+exten => _.,1,NoOp(OpenAI audio channel established)
+    same => n,Answer()
+    same => n,Bridge(${BRIDGEPEER})
+
+;======================================
+; OUTBOUND CALLS (AI-initiated)
+;======================================
+[outbound]
+; Outbound calls initiated by Jarvis API
+exten => _X.,1,NoOp(=== JARVIS OUTBOUND CALL ===)
+    same => n,NoOp(Calling: ${EXTEN})
+    same => n,NoOp(Session ID: ${JARVIS_SESSION_ID})
+    same => n,NoOp(Persona: ${JARVIS_PERSONA})
+    same => n,Set(CALLERID(num)=${OUTBOUND_CALLERID})
+    same => n,Set(CALL_START=${EPOCH})
+    ; Dial the destination via Telefacil trunk
+    same => n,Dial(PJSIP/${EXTEN}@telefacil_endpoint,60,tTgG)
+    same => n,NoOp(Outbound call ended: ${DIALSTATUS})
+    same => n,Hangup()
+
+;======================================
+; TRANSFER CONTEXT (human fallback)
+;======================================
+[transfer]
+; Transfer context for Jarvis AI transfers to human operators
+
+; General queue / Reception
+exten => 100,1,NoOp(Transfer to general queue)
+ same => n,Answer()
+ same => n,Dial(PJSIP/queue-general,30,tT)
+ same => n,VoiceMail(100@default,u)
+ same => n,Hangup()
+
+; Sales / Commercial (Laura)
+exten => 101,1,NoOp(Transfer to Sales)
+ same => n,Answer()
+ same => n,Dial(PJSIP/101,30,tT)
+ same => n,VoiceMail(101@default,u)
+ same => n,Hangup()
+
+; Operations (Fernando)
+exten => 102,1,NoOp(Transfer to Operations)
+ same => n,Answer()
+ same => n,Dial(PJSIP/102,30,tT)
+ same => n,VoiceMail(102@default,u)
+ same => n,Hangup()
+
+; Administration / Accounting
+exten => 103,1,NoOp(Transfer to Administration)
+ same => n,Answer()
+ same => n,Dial(PJSIP/103,30,tT)
+ same => n,VoiceMail(103@default,u)
+ same => n,Hangup()
+
+; Legal / Collections
+exten => 104,1,NoOp(Transfer to Legal)
+ same => n,Answer()
+ same => n,Dial(PJSIP/104,30,tT)
+ same => n,VoiceMail(104@default,u)
+ same => n,Hangup()
+
+; Support / SAC
+exten => 105,1,NoOp(Transfer to Support)
+ same => n,Answer()
+ same => n,Dial(PJSIP/105,30,tT)
+ same => n,VoiceMail(105@default,u)
+ same => n,Hangup()
+
+;======================================
+; CONSULTATION TRANSFER CONTEXTS
+;======================================
+; Attended/consultation transfer workflow:
+; 1. Caller is put on hold with music in ConfBridge
+; 2. AI calls MJ's mobile to brief about the caller
+; 3. MJ decides to accept or refuse
+; 4. If accepted: MJ joins the ConfBridge with caller
+; 5. If refused: caller returns to AI with context
+
+;--------------------------------------
+; STEP 1: Put caller on hold in conference
+;--------------------------------------
+[consultation-hold]
+; Move caller to ConfBridge with MOH while we call MJ
+; Variables expected:
+;   CONSULTATION_ID = Unique consultation session ID
+;   CALLER_CHANNEL = Original caller channel
+;   CONFERENCE_ROOM = Unique conference room name (consult-XXXXX)
+
+exten => s,1,NoOp(=== CONSULTATION HOLD: ${CONSULTATION_ID} ===)
+    same => n,NoOp(Caller channel: ${CALLER_CHANNEL})
+    same => n,NoOp(Conference room: ${CONFERENCE_ROOM})
+    same => n,Answer()
+    ; Join the ConfBridge with caller profile (waits for marked user)
+    same => n,ConfBridge(${CONFERENCE_ROOM},consultation_bridge,caller_profile)
+    ; If ConfBridge exits normally, hangup
+    same => n,NoOp(Caller left consultation conference)
+    same => n,Hangup()
+
+; Extension for direct conference room entry
+exten => _consult-.,1,NoOp(Direct consultation entry: ${EXTEN})
+    same => n,Set(CONFERENCE_ROOM=${EXTEN})
+    same => n,Answer()
+    same => n,ConfBridge(${CONFERENCE_ROOM},consultation_bridge,caller_profile)
+    same => n,Hangup()
+
+;--------------------------------------
+; STEP 2: Call MJ and connect to briefing AI
+;--------------------------------------
+[consultation-brief]
+; Outbound call to MJ's mobile, then connect to OpenAI for briefing
+; Variables expected:
+;   CONSULTATION_ID = Consultation session ID
+;   MJ_MOBILE = MJ's mobile number
+;   CALLER_INFO = JSON with caller context for briefing
+;   CONFERENCE_ROOM = Conference room name for later bridging
+
+exten => _+X.,1,NoOp(=== CONSULTATION BRIEF: Calling MJ ===)
+    same => n,NoOp(Consultation ID: ${CONSULTATION_ID})
+    same => n,NoOp(Conference room: ${CONFERENCE_ROOM})
+    same => n,Set(CALLERID(num)=951650500)
+    same => n,Set(CALLERID(name)=Jarvis)
+    ; Store consultation info as SIP headers for OpenAI webhook
+    same => n,Set(PJSIP_HEADER(add,X-Consultation-ID)=${CONSULTATION_ID})
+    same => n,Set(PJSIP_HEADER(add,X-Consultation-Room)=${CONFERENCE_ROOM})
+    same => n,Set(PJSIP_HEADER(add,X-Consultation-Type)=briefing)
+    ; Dial MJ via Telefacil, 30s timeout
+    same => n,Dial(PJSIP/${EXTEN}@telefacil_endpoint,30,tTgG)
+    same => n,NoOp(MJ call result: ${DIALSTATUS})
+    ; Handle dial result
+    same => n,GotoIf($["${DIALSTATUS}" = "ANSWER"]?mj_answered)
+    same => n,GotoIf($["${DIALSTATUS}" = "BUSY"]?mj_busy)
+    same => n,GotoIf($["${DIALSTATUS}" = "NOANSWER"]?mj_noanswer)
+    same => n,Goto(mj_failed)
+
+    same => n(mj_answered),NoOp(MJ answered - connecting to briefing AI)
+    ; Route to OpenAI for briefing conversation
+    same => n,Set(TIMEOUT(absolute)=120)
+    same => n,Dial(PJSIP/openai_realtime,120,tTgG)
+    same => n,Hangup()
+
+    same => n(mj_busy),NoOp(MJ busy - triggering return to AI)
+    same => n,AGI(agi://127.0.0.1:4573/consultation_mj_unavailable?id=${CONSULTATION_ID}&reason=busy)
+    same => n,Hangup()
+
+    same => n(mj_noanswer),NoOp(MJ no answer - triggering return to AI)
+    same => n,AGI(agi://127.0.0.1:4573/consultation_mj_unavailable?id=${CONSULTATION_ID}&reason=noanswer)
+    same => n,Hangup()
+
+    same => n(mj_failed),NoOp(MJ call failed - triggering return to AI)
+    same => n,AGI(agi://127.0.0.1:4573/consultation_mj_unavailable?id=${CONSULTATION_ID}&reason=${DIALSTATUS})
+    same => n,Hangup()
+
+;--------------------------------------
+; STEP 3a: MJ accepted - join conference
+;--------------------------------------
+[consultation-bridge]
+; MJ joins the conference with the caller
+; Variables expected:
+;   CONSULTATION_ID = Consultation session ID
+;   CONFERENCE_ROOM = Conference room name
+
+exten => _consult-.,1,NoOp(=== MJ JOINING CONSULTATION: ${EXTEN} ===)
+    same => n,Set(CONFERENCE_ROOM=${EXTEN})
+    same => n,NoOp(Consultation ID: ${CONSULTATION_ID})
+    same => n,Answer()
+    ; Join as marked user - this starts the conversation with caller
+    same => n,ConfBridge(${CONFERENCE_ROOM},consultation_bridge,mj_profile,consultation_menu)
+    same => n,NoOp(MJ left consultation conference)
+    same => n,Hangup()
+
+; Direct extension entry
+exten => s,1,NoOp(MJ joining conference: ${CONFERENCE_ROOM})
+    same => n,Answer()
+    same => n,ConfBridge(${CONFERENCE_ROOM},consultation_bridge,mj_profile,consultation_menu)
+    same => n,Hangup()
+
+;--------------------------------------
+; STEP 3b: Return caller to AI (MJ refused/unavailable)
+;--------------------------------------
+[consultation-return]
+; Return caller from ConfBridge to a new AI session with context
+; Variables expected:
+;   CONSULTATION_ID = Consultation session ID
+;   CALLER_CHANNEL = Caller's channel
+;   RETURN_CONTEXT = JSON with context for the new AI session
+
+exten => s,1,NoOp(=== RETURNING CALLER TO AI ===)
+    same => n,NoOp(Consultation ID: ${CONSULTATION_ID})
+    same => n,NoOp(Return context: ${RETURN_CONTEXT})
+    ; Set headers for the new OpenAI session
+    same => n,Set(PJSIP_HEADER(add,X-Consultation-ID)=${CONSULTATION_ID})
+    same => n,Set(PJSIP_HEADER(add,X-Consultation-Type)=return)
+    same => n,Set(PJSIP_HEADER(add,X-Return-Context)=${RETURN_CONTEXT})
+    ; Route back to OpenAI Realtime
+    same => n,Set(TIMEOUT(absolute)=${MAX_CALL_DURATION})
+    same => n,Dial(PJSIP/openai_realtime,${MAX_CALL_DURATION},tTgG)
+    same => n,NoOp(Returned call ended: ${DIALSTATUS})
+    same => n,Hangup()
+
+;--------------------------------------
+; CLEANUP: Handle caller hangup during consultation
+;--------------------------------------
+[consultation-cleanup]
+; Called when caller hangs up during consultation hold
+exten => h,1,NoOp(=== CONSULTATION CLEANUP ===)
+    same => n,NoOp(Consultation ID: ${CONSULTATION_ID})
+    same => n,NoOp(Triggering cleanup webhook)
+    ; Notify API to cancel MJ call and cleanup state
+    same => n,AGI(agi://127.0.0.1:4573/consultation_caller_hangup?id=${CONSULTATION_ID})
+
+;======================================
+; FALLBACK (legacy greeting)
+;======================================
+[fallback]
+; Play greeting and hangup (for testing without OpenAI)
+exten => s,1,NoOp(Fallback mode - playing greeting)
+    same => n,Answer()
+    same => n,Wait(1)
+    same => n,Playback(custom/jarvis-greeting)
+    same => n,Wait(2)
+    same => n,Hangup()

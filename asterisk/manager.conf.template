@@ -1,0 +1,24 @@
+; Jarvis Asterisk Manager Configuration
+; Used for AMI access from Jarvis API
+
+[general]
+enabled = yes
+port = 5038
+bindaddr = 127.0.0.1
+
+; Allow connections from Jarvis API only
+; Credentials set via environment variables
+
+[${AMI_USER}]
+secret = ${AMI_SECRET}
+deny = 0.0.0.0/0.0.0.0
+permit = 127.0.0.1/255.255.255.255
+permit = 172.17.0.0/255.255.0.0   ; Docker bridge network only
+
+; Restricted permissions (minimum required)
+read = system,call,log,verbose,command,originate
+write = call,originate
+
+; Event filters
+eventfilter = !Event: RTCPSent
+eventfilter = !Event: RTCPReceived

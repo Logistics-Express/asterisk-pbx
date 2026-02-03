@@ -1,0 +1,23 @@
+# Environment
+.env
+*.env.local
+
+# Asterisk generated files
+*.db
+*.sqlite3
+
+# Certificates (should be managed separately)
+asterisk/certs/*.crt
+asterisk/certs/*.key
+asterisk/certs/*.pem
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
